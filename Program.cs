@@ -13,7 +13,7 @@ namespace DtoGen
     /// </summary>
     class Program
     {
-        /* dtogen.exe -name "nom entité" -sql "requete" -cn "nom de la chaîne de connexion"
+        /* dtogen.exe -name "class name" -sql "query" -cn "connection string name"
          * */
 
         static void Main(string[] args)
