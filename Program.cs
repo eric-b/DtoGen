@@ -24,7 +24,7 @@ namespace DtoGen
 
                 string entityName = null, sql = null, connectionStringName = null, entityNs = null;
 
-                #region Parse la ligne de commande
+                #region Command line parsing
                 const string argName = "name", argSql = "sql", argCn = "cn", argNs = "ns";
                 for (int i = 0; i < args.Length - 1; i++)
                 {
@@ -86,7 +86,7 @@ Syntax:
                 }
                 catch (Exception ex)
                 {
-                    throw new ArgumentException(string.Format("Connection string name invalid or unknown. Check parameter {0} or config file (connection string name: {1}).", argCn, connectionStringName), argCn, ex);
+                    throw new ArgumentException(string.Format("Connection string name invalid or unknown. Check parameter '{0}' or config file (connection string name: '{1}'). Case is sensitive!", argCn, connectionStringName), argCn, ex);
                 }
                 using (var cmd = db.GetSqlStringCommand(sql))
                 {
@@ -160,7 +160,18 @@ Syntax:
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.ToString());
+                const string filename = "last-error.log";
+                try
+                {
+                    File.WriteAllText("last-error.log",
+                                      string.Format("{0}: {1}\r\n{2}", DateTime.Now, Environment.CommandLine, ex));
+                    var path = new FileInfo(filename);
+                    Console.WriteLine("{0}\r\nView full error details in :\r\n{1}", ex.Message, path.FullName);
+                }
+                catch
+                {
+                    Console.WriteLine(ex.ToString());
+                }
             }
             finally
             {
