@@ -2,6 +2,8 @@
 using System.CodeDom;
 using System.CodeDom.Compiler;
 using System.Collections.Generic;
+using System.Configuration;
+using System.Data.Common;
 using System.IO;
 using System.Linq;
 using Microsoft.Practices.EnterpriseLibrary.Data;
@@ -62,95 +64,43 @@ Syntax:
                 }
                 #endregion
 
-                #region Initialize generated class
-                var targetUnit = new CodeCompileUnit();
-                var targetClass = new CodeTypeDeclaration(entityName);
-                targetClass.IsClass = true;
-                targetClass.TypeAttributes = System.Reflection.TypeAttributes.Public | System.Reflection.TypeAttributes.Sealed;
-                var codeNs = new CodeNamespace();
-                if (!string.IsNullOrEmpty(entityNs))
-                    codeNs.Name = entityNs;
-                codeNs.Imports.Add(new CodeNamespaceImport("System"));
-                codeNs.Types.Add(targetClass);
-                targetUnit.Namespaces.Add(codeNs);
-                codeNs.Comments.Add(new CodeCommentStatement(string.Format(@"Generated class from query: 
-{0}", sql), false));
-                #endregion
+                // Initialize generated class
+                CodeTypeDeclaration targetClass;
+                var targetUnit = Generator.CreateDefaultCompileUnit(entityNs, entityName, new CodeCommentStatement(string.Format(@"Generated class from query: {0}", sql), false), out targetClass);
 
+                var cxString = ConfigurationManager.ConnectionStrings[connectionStringName];
+                if (cxString == null)
+                    throw new ArgumentException(string.Format("Connection string name invalid or unknown. Check parameter '{0}' or config file (connection string name: '{1}'). Case is sensitive!\r\nAvailable connection strings:\r\n:{2}", argCn, connectionStringName, string.Join(", ", ConfigurationManager.ConnectionStrings.OfType<ConnectionStringSettings>().Select(t => t.ConnectionString))));
+                var dbFactory = DbProviderFactories.GetFactory(cxString.ProviderName);
 
-                var propertyNames = new HashSet<string>();
-                Database db;
-                try
+                using (var cx = dbFactory.CreateConnection())
                 {
-                    db = Microsoft.Practices.EnterpriseLibrary.Common.Configuration.EnterpriseLibraryContainer.Current.GetInstance<Database>(connectionStringName);
-                }
-                catch (Exception ex)
-                {
-                    throw new ArgumentException(string.Format("Connection string name invalid or unknown. Check parameter '{0}' or config file (connection string name: '{1}'). Case is sensitive!", argCn, connectionStringName), argCn, ex);
-                }
-                using (var cmd = db.GetSqlStringCommand(sql))
-                {
-                    Console.WriteLine("Please wait...");
-                    using (var reader = db.ExecuteReader(cmd))
+                    cx.ConnectionString = cxString.ConnectionString;
+                    cx.Open();
+                    using (var cmd = cx.CreateCommand())
                     {
-                        var schema = reader.GetSchemaTable();
-
-                        for (int i = 0; i < schema.Rows.Count; i++)
+                        cmd.CommandText = sql;
+                        cmd.CommandType = System.Data.CommandType.Text;
+                        Console.WriteLine("Please wait...");
+                        using (var reader = cmd.ExecuteReader())
                         {
-                            var name = (string)schema.Rows[i]["ColumnName"];
-                            var type = (Type)schema.Rows[i]["DataType"];
-                            var allowNull = (bool)schema.Rows[i]["AllowDBNull"];
-                            if (allowNull && !type.IsClass)
-                                type = Type.GetType(string.Format("System.Nullable`1[{0}]", type.FullName), true);
-                            if (string.IsNullOrEmpty(name))
-                            {
-                                Console.WriteLine(string.Format("WARNING: column without name at index {0} !", i));
-                                continue;
-                            }
-                            if (propertyNames.Contains(name))
-                            {
-                                Console.WriteLine(string.Format("WARNING: duplicate column name ignored: {0}", name));
-                                continue;
-                            }
-                            // We use CodeSnippetTypeMember since auto-implemented properties are not supported by CodeDOM... (supports only "CSharp" provider)
+                            var generator = new Generator(new ConsoleTraceWriter());
 
-                            var firstCharacter = name.First();
-                            if (char.IsDigit(firstCharacter))
-                            {
-                                Console.WriteLine(string.Format("WARNING: invalid column name: {0}", name));
-                            }
-                            else if (name.ToLower().FirstOrDefault(t => !allowedPropertyNameCharacters.Contains(t)) != default(char))
-                            {
-                                Console.WriteLine(string.Format("WARNING: invalid column name: {0}", name));
-                            }
-
-                            targetClass.Members.Add(new CodeMemberField()
-                            {
-                                Name = string.Format("{1}{0} {{ get; set; }} //", name, (char.IsUpper(firstCharacter) ? null : "@")), 
-                                Type = new CodeTypeReference(type),
-                                Attributes = MemberAttributes.Public | MemberAttributes.Final
-
-                            });
-                            propertyNames.Add(name);
+                            generator.EmitMembers(reader, targetClass);
                         }
                     }
                 }
 
                 #region Generates class
-                if (propertyNames.Count != 0)
+                if (targetClass.Members.Count != 0)
                 {
-                    var codeProvider = CodeDomProvider.CreateProvider("CSharp");
-                    var options = new CodeGeneratorOptions()
-                    {
-                        BracingStyle = "C"
-                    };
                     var filename = string.Format("{0}.cs", entityName);
                     using (var writer = new StreamWriter(filename))
                     {
-                        codeProvider.GenerateCodeFromCompileUnit(targetUnit, writer, options);
+                        Generator.GenerateCSCodeFromCompileUnit(targetClass, targetUnit, writer);
                     }
 
-                    Console.WriteLine(string.Format("Generated class {0}: {1} propertie(s) mapped.", filename, propertyNames.Count));
+                    Console.WriteLine(string.Format("Generated class {0}: {1} propertie(s) mapped.", filename, targetClass.Members.Count));
                 }
                 else
                 {
